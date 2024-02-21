@@ -1,0 +1,150 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: myapp-ingress
+  annotations:
+    nginx.ingress.kubernetes.io/rewrite-target: /
+    cert-manager.io/cluster-issuer: "letsencrypt-prod"
+    certmanager.k8s.io/acme-challenge-type: dns01
+    kubernetes.io/ingress.class: nginx
+spec:
+  tls:
+  - hosts:
+    - pocdns.net
+    secretName: pocdns-net-tls
+  rules:
+  - host: pocdns.net
+    http:
+      paths:
+      - pathType: ImplementationSpecific
+        path: "/"
+        backend:
+          service:
+            name: my-app-svc
+            port:
+              number: 80
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: my-app-svc
+  labels:
+    app: my-app
+spec:
+  type: LoadBalancer
+  ports:
+  - port: 80
+    targetPort: 5000
+  selector:
+    app: my-app
+---
+apiVersion: argoproj.io/v1alpha1
+kind: Rollout
+metadata:
+  name: my-app
+  labels:
+    app: mock-metrics-exporter
+spec:
+  replicas: 3
+  strategy:
+    canary:
+      analysis:
+        templates:
+        - templateName: mock-metrics-analysis
+        #failureLimit: 1
+        args:
+        - name: service-name
+          value: metrics-generator-service
+      steps:
+      - setWeight: 20
+      - pause: {duration: 60s}
+      - setWeight: 40
+      - pause: {duration: 60s}
+      - setWeight: 60
+      - pause: {duration: 30s}
+      - setWeight: 80
+      - pause: {duration: 30s}
+  selector:
+    matchLabels:
+      app: my-app
+  template:
+    metadata:
+      labels:
+        app: my-app
+    spec:
+      containers:
+      - name: my-app
+        # image: nginx:stable-perl
+        #image: nginx:mainline-perl
+        image: us-central1-docker.pkg.dev/neat-throne-411515/test-app/myapp:2
+        ports:
+        - containerPort: 5000
+
+
+---
+apiVersion: argoproj.io/v1alpha1
+kind: AnalysisTemplate
+metadata:
+  name: mock-metrics-analysis
+spec:
+  metrics:
+  - name: success-rate
+    interval: 1m
+    successCondition: result[0] > 0.8  # Defined success criteria           # app_success_rate{service="mock-metrics-exporter"}
+    provider:
+      prometheus:
+        address: http://kube-prometheus-stack-prometheus.monitoring.svc.cluster.local:9090 
+        query: |
+          sum(rate(nginx_ingress_controller_requests{host="pocdns.net",status="200"}[30m])) / sum(rate(nginx_ingress_controller_requests{host="pocdns.net"}[30m]))
+
+---
+
+apiVersion: cert-manager.io/v1
+kind: ClusterIssuer
+metadata:
+  name: letsencrypt-prod
+spec:
+  acme:
+    server: https://acme-v02.api.letsencrypt.org/directory
+    email: lekeariyo2015@gmail.com
+    privateKeySecretRef:
+      name: letsencrypt-prod
+    solvers:
+    - http01:
+        ingress:
+          class: nginx
+
+
+---
+
+apiVersion: argoproj.io/v1alpha1
+kind: ApplicationSet
+metadata:
+  name: root-appset
+  namespace: argocd
+spec:
+  generators:
+  - list:
+      elements:
+      - cluster: my-first-cluster
+        url: https://34.70.254.149
+      - cluster: my-second-cluster
+        url: https://35.197.194.9
+  template:
+    metadata:
+      name: '{{cluster}}-guestbook'
+    spec:
+      project: default
+      source:
+        # repoURL: https://github.com/argoproj/argo-cd.git
+        # targetRevision: HEAD
+        # path: applicationset/examples/list-generator/guestbook/{{cluster}}
+        repoURL: https://github.com/Leke-Ariyo/poc-app.git
+        targetRevision: HEAD
+        path: '{{cluster}}'
+      destination:
+        server: '{{url}}'
+        namespace: default
+      syncPolicy:
+        automated: {}

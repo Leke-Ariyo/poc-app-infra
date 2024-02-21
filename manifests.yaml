@@ -1,0 +1,67 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mock-metrics-exporter
+  labels:
+    app: mock-metrics-exporter
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: mock-metrics-exporter
+  template:
+    metadata:
+      labels:
+        app: mock-metrics-exporter
+    spec:
+      containers:
+      - name: exporter
+        image: lexmill99/mock-metrics-exporter:latest
+        ports:
+        - containerPort: 8000
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: mock-metrics-exporter
+  labels:
+    app: mock-metrics-exporter
+spec:
+  selector:
+    app: mock-metrics-exporter
+  ports:
+  - protocol: TCP
+    name: metrics
+    port: 8000
+    targetPort: 8000
+
+---
+
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: mock-metrics-exporter
+  namespace: monitoring
+  labels:
+    app.kubernetes.io/instance: kube-prometheus-stack
+    app.kubernetes.io/managed-by: Helm
+    jobLabel: node-exporter
+    app.kubernetes.io/version: 55.11.0
+    chart: kube-prometheus-stack-55.11.0
+    heritage: Helm
+    release: kube-prometheus-stack
+  annotations:
+    meta.helm.sh/release-name: kube-prometheus-stack
+    meta.helm.sh/release-namespace: monitoring
+spec:
+  namespaceSelector:
+    matchNames:
+      - default
+  selector:
+    matchLabels:
+      app: mock-metrics-exporter
+  endpoints:
+  - port: metrics
+    interval: 15s
+    path: "/"
